@@ -52,6 +52,101 @@ SYMBOL_MAP = {
 }
 
 # -------------------------
+# WebSocket Data Fetching
+# -------------------------
+def fetch_candles(symbol, timeframe, count=None):
+    """Fetch candlestick data from Deriv WebSocket API"""
+    if count is None:
+        count = CANDLES_N
+    
+    candles = []
+    ws = None
+    
+    try:
+        def on_message(ws, message):
+            nonlocal candles
+            try:
+                data = json.loads(message)
+                if DEBUG:
+                    print(f"Received: {data}")
+                
+                if data.get("msg_type") == "candles":
+                    candle_data = data.get("candles", [])
+                    for candle in candle_data:
+                        candles.append({
+                            "epoch": candle.get("epoch", 0),
+                            "open": float(candle.get("open", 0)),
+                            "high": float(candle.get("high", 0)),
+                            "low": float(candle.get("low", 0)),
+                            "close": float(candle.get("close", 0))
+                        })
+                
+                elif data.get("msg_type") == "ohlc":
+                    ohlc = data.get("ohlc", {})
+                    if ohlc:
+                        candles.append({
+                            "epoch": ohlc.get("epoch", 0),
+                            "open": float(ohlc.get("open", 0)),
+                            "high": float(ohlc.get("high", 0)),
+                            "low": float(ohlc.get("low", 0)),
+                            "close": float(ohlc.get("close", 0))
+                        })
+                
+            except Exception as e:
+                if DEBUG:
+                    print(f"Error processing message: {e}")
+        
+        def on_error(ws, error):
+            if DEBUG:
+                print(f"WebSocket error: {error}")
+        
+        def on_close(ws, close_status_code, close_msg):
+            if DEBUG:
+                print("WebSocket connection closed")
+        
+        def on_open(ws):
+            if DEBUG:
+                print(f"Requesting candles for {symbol}")
+            
+            # Request historical candles
+            request = {
+                "ticks_history": symbol,
+                "adjust_start_time": 1,
+                "count": count,
+                "end": "latest",
+                "start": 1,
+                "style": "candles",
+                "granularity": timeframe
+            }
+            ws.send(json.dumps(request))
+        
+        # Create WebSocket connection
+        ws = websocket.WebSocketApp(DERIV_WS_URL,
+                                  on_open=on_open,
+                                  on_message=on_message,
+                                  on_error=on_error,
+                                  on_close=on_close)
+        
+        # Run with timeout
+        ws.run_forever(timeout=30)
+        
+    except Exception as e:
+        if DEBUG:
+            print(f"Error fetching candles for {symbol}: {e}")
+        
+    finally:
+        if ws:
+            ws.close()
+    
+    # Sort candles by epoch
+    candles.sort(key=lambda x: x["epoch"])
+    
+    if DEBUG:
+        print(f"Fetched {len(candles)} candles for {symbol}")
+    
+    return candles
+
+# -------------------------
 # Persistence
 # -------------------------
 def load_persist():
@@ -144,6 +239,19 @@ def compute_mas(candles):
         ma3 = [None] * len(candles)
     
     return ma1, ma2, ma3
+
+# -------------------------
+# Helper Functions
+# -------------------------
+def near_ma_levels(price, ma1, ma2, tolerance=0.001):
+    """Check if price is near MA levels"""
+    if ma1 is None or ma2 is None:
+        return False, False
+    
+    near_ma1 = abs(price - ma1) / ma1 <= tolerance
+    near_ma2 = abs(price - ma2) / ma2 <= tolerance
+    
+    return near_ma1, near_ma2
 
 # -------------------------
 # Updated Simple Rejection Detection
@@ -249,12 +357,16 @@ def detect_signal(candles, tf, shorthand):
 def create_signal_chart(signal_data):
     """Create chart for signal visualization"""
     candles = signal_data["candles"]
-    ma1, ma2 = signal_data["ma1"], signal_data["ma2"]
     signal_idx = signal_data["idx"]
+    
+    # Recompute MAs for chart
+    ma1, ma2, ma3 = compute_mas(candles)
     
     n = len(candles)
     chart_start = max(0, n - LAST_N_CHART)
     chart_candles = candles[chart_start:]
+    chart_ma1 = ma1[chart_start:] if ma1 else [None] * len(chart_candles)
+    chart_ma2 = ma2[chart_start:] if ma2 else [None] * len(chart_candles)
 
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(14, 10))
@@ -284,9 +396,17 @@ def create_signal_chart(signal_data):
         
         ax.plot([i, i], [l, h], color=edge_color, linewidth=1.2, alpha=0.8)
     
-    # Plot moving averages
-    ax.plot(range(len(chart_candles)), ma1[chart_start:], color="#FFFFFF", linewidth=2, label="MA1 (SMMA HLC3-9)", alpha=0.9)
-    ax.plot(range(len(chart_candles)), ma2[chart_start:], color="#00BFFF", linewidth=2, label="MA2 (SMMA Close-19)", alpha=0.9)
+    # Plot moving averages (filter out None values)
+    ma1_valid = [(i, v) for i, v in enumerate(chart_ma1) if v is not None]
+    ma2_valid = [(i, v) for i, v in enumerate(chart_ma2) if v is not None]
+    
+    if ma1_valid:
+        x_vals, y_vals = zip(*ma1_valid)
+        ax.plot(x_vals, y_vals, color="#FFFFFF", linewidth=2, label="MA1 (SMMA HLC3-9)", alpha=0.9)
+    
+    if ma2_valid:
+        x_vals, y_vals = zip(*ma2_valid)
+        ax.plot(x_vals, y_vals, color="#00BFFF", linewidth=2, label="MA2 (SMMA Close-19)", alpha=0.9)
 
     # Mark signal point
     signal_chart_idx = signal_idx - chart_start
