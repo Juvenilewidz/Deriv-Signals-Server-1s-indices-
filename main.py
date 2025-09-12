@@ -732,7 +732,7 @@ def run_analysis():
             arrangement_emoji = "📈" if signal["ma_arrangement"] == "BULLISH_ARRANGEMENT" else "📉"
             crossover_info = f" ({signal['crossover']})" if signal['crossover'] != "NONE" else ""
 
-                 caption = (f"🎯 {signal['symbol']} {tf_display} - {signal['side']} SIGNAL\n"
+            caption = (f"🎯 {signal['symbol']} {tf_display} - {signal['side']} SIGNAL\n"
                       f"{arrangement_emoji} MA Setup: {signal['ma_arrangement'].replace('_', ' ')}{crossover_info}\n" 
                       f"🎨 Pattern: {signal['pattern']}\n"
                       f"📍 Level: {signal['ma_level']} Dynamic S/R\n"
