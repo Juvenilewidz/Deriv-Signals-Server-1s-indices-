@@ -1,0 +1,38 @@
+name: Continuous DSR Trading Bot
+
+# Trigger every 6 hours or manually
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  workflow_dispatch:
+
+jobs:
+  continuous-trading:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max runtime
+
+    steps:
+      # Step 1: Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Python environment
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      # Step 3: Install dependencies
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install websocket-client matplotlib requests
+
+      # Step 4: Run the main bot
+      - name: Run continuous trading bot
+        env:
+          DERIV_API_KEY: ${{ secrets.DERIV_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DEBUG: "1"
+        run: python main.py
