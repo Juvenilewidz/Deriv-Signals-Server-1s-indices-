@@ -729,13 +729,13 @@ def create_signal_chart(signal_data):
 # Main Execution with Multiple Timeframes
 # -------------------------
 def run_analysis():
-    """DSR analysis with advanced logic on multiple timeframes per symbol"""
+    """DSR analysis with MA crossover detection on multiple timeframes per symbol"""
     signals_found = 0
     
     for shorthand, deriv_symbol in SYMBOL_MAP.items():
-        timeframes = SYMBOL_TF_MAP.get(shorthand, [300, 600])
+        timeframes = SYMBOL_TF_MAP.get(shorthand, [300])  # Default to 5min if not specified
         
-        for tf in timeframes:
+        for tf in timeframes:  # Each symbol runs on its specified timeframes
             try:
                 tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
                 
@@ -752,4 +752,50 @@ def run_analysis():
                 if not signal:
                     continue
                 
-                current_
+                current_epoch = signal["candles"][signal["idx"]]["epoch"]
+                if already_sent(shorthand, tf, current_epoch, signal["side"]):
+                    if DEBUG:
+                        print(f"Signal already sent for {shorthand} {tf_display}")
+                    continue
+                
+                # Create enhanced alert message with MA crossover info and timeframe
+                arrangement_emoji = "📈" if signal["ma_arrangement"] == "BULLISH_ARRANGEMENT" else "📉"
+                crossover_info = f" ({signal['crossover']})" if signal['crossover'] != "NONE" else ""
+                
+                caption = (f"🎯 {signal['symbol']} {tf_display} - {signal['side']} SIGNAL\n"
+                          f"{arrangement_emoji} MA Setup: {signal['ma_arrangement'].replace('_', ' ')}{crossover_info}\n" 
+                          f"🎨 Pattern: {signal['pattern']}\n"
+                          f"📍 Level: {signal['ma_level']} Dynamic S/R\n"
+                          f"💰 Price: {signal['price']:.5f}\n"
+                          f"📊 Context: {signal['context']}")
+                
+                chart_path = create_signal_chart(signal)
+                
+                success, msg_id = send_telegram_photo(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, caption, chart_path)
+                
+                if success:
+                    mark_sent(shorthand, tf, current_epoch, signal["side"])
+                    signals_found += 1
+                    if DEBUG:
+                        print(f"DSR signal sent for {shorthand} {tf_display}: {signal['side']}")
+                
+                try:
+                    os.unlink(chart_path)
+                except:
+                    pass
+                    
+            except Exception as e:
+                if DEBUG:
+                    tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
+                    print(f"Error analyzing {shorthand} {tf_display}: {e}")
+                    traceback.print_exc()
+    
+    if DEBUG:
+        print(f"Analysis complete. {signals_found} DSR signals found.")
+
+if __name__ == "__main__":
+    try:
+        run_analysis()
+    except Exception as e:
+        print(f"Critical error: {e}")
+        traceback.print_exc()
