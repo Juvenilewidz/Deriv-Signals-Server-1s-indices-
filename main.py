@@ -647,7 +647,8 @@ if __name__ == "__main__":
         run_analysis()
     except Exception as e:
         print(f"Critical error: {e}")
-        traceback.print_exc() {shorthand} {tf_display}: {len(candles)})
+        traceback.print_exc(f"{shorthand} {tf_display}: {len(candles)}")
+
                     continue
                 
                 signal = detect_signal(candles, tf, shorthand)
