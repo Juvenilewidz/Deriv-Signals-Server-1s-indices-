@@ -708,16 +708,4 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Critical error in Core 1s Indices DSR Bot: {e}")
         traceback.print_exc()
-                            "open": float(candle.get("open", 0)),
-                            "high": float(candle.get("high", 0)),
-                            "low": float(candle.get("low", 0)),
-                            "close": float(candle.get("close", 0))
-                        })
-                    
-                    data_received = True
-                    result_queue.put("SUCCESS")
-                
-                elif data.get("msg_type") == "ohlc":
-                    ohlc = data.get("ohlc", {})
-                    if ohlc:
-                        candles.append({
+        
