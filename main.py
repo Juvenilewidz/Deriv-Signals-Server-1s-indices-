@@ -357,65 +357,62 @@ def is_market_trending(ma1, ma2, ma3, price):
 # Core DSR Signal Detection (Strict, updated logic)
 # -------------------------
 def detect_signal(candles, tf, shorthand):
+    """Signal only if the latest candle is closed and confirmed as a rejection candlestick at MA1 or MA2."""
     n = len(candles)
     if n < MIN_CANDLES:
         return None
+
+    # Use the last candle -- assumed closed
     current_idx = n - 1
     current_candle = candles[current_idx]
+
+    # Compute moving averages
     ma1, ma2, ma3 = compute_mas(candles)
     current_ma1 = ma1[current_idx] if current_idx < len(ma1) else None
     current_ma2 = ma2[current_idx] if current_idx < len(ma2) else None
-    current_ma3 = ma3[current_idx] if current_idx < len(ma3) else None
-    current_close = current_candle["close"]
-    trend = is_market_trending(current_ma1, current_ma2, current_ma3, current_close)
-    if trend is None:
-        if DEBUG:
-            print(f"Ranging market for {shorthand} - no trend detected.")
-        return None
 
-    is_rejection, pattern_type = is_strict_rejection_candle(current_candle)
+    trend_bias = get_trend_bias(current_ma1, current_ma2)
+
+    # Confirm the candle is a rejection type
+    is_rejection, pattern_type = is_rejection_candle(current_candle)
     if not is_rejection:
-        return None
+        return None  # Only act on true rejection candles
 
-    touched_ma1 = candle_touches_ma(current_candle, current_ma1)
-    touched_ma2 = candle_touches_ma(current_candle, current_ma2)
-    if not (touched_ma1 or touched_ma2):
-        return None
-
-    if trend == "BULLISH":
-        if pattern_type != "LOWER_REJECTION":
+    # Confirm rejection occurs at MA1 or MA2 level
+    rejection_at_ma = False
+    if trend_bias == "BUY_BIAS":
+        # Lower wick must touch/cross MA1 or MA2
+        if (current_candle["low"] <= current_ma1 <= min(current_candle["open"], current_candle["close"])) or \
+           (current_candle["low"] <= current_ma2 <= min(current_candle["open"], current_candle["close"])):
+            rejection_at_ma = True
+        if rejection_at_ma and pattern_type in ["LOWER_REJECTION", "SMALL_BODY_REJECTION"]:
+            signal_side = "BUY"
+        else:
             return None
-    elif trend == "BEARISH":
-        if pattern_type != "UPPER_REJECTION":
-            return None
 
-    if touched_ma1:
-        ma_level = "MA1"
-    elif touched_ma2:
-        ma_level = "MA2"
+    elif trend_bias == "SELL_BIAS":
+        # Upper wick must touch/cross MA1 or MA2
+        if (max(current_candle["open"], current_candle["close"]) <= current_ma1 <= current_candle["high"]) or \
+           (max(current_candle["open"], current_candle["close"]) <= current_ma2 <= current_candle["high"]):
+            rejection_at_ma = True
+        if rejection_at_ma and pattern_type in ["UPPER_REJECTION", "SMALL_BODY_REJECTION"]:
+            signal_side = "SELL"
+        else:
+            return None
     else:
         return None
-
-    if DEBUG:
-        print(f"VALID DSR: {trend} - {pattern_type} at {ma_level} - Price: {current_close:.2f}, MA1: {current_ma1:.2f}, MA2: {current_ma2:.2f}, MA3: {current_ma3:.2f}")
 
     return {
         "symbol": shorthand,
         "tf": tf,
-        "side": "BUY" if trend == "BULLISH" else "SELL",
+        "side": signal_side,
         "pattern": pattern_type,
-        "ma_level": ma_level,
-        "ma_arrangement": "BULLISH_ARRANGEMENT" if trend == "BULLISH" else "BEARISH_ARRANGEMENT",
-        "context": f"Confirmed {pattern_type.replace('_',' ').title()} at {ma_level}",
-        "price": current_close,
-        "ma1": current_ma1,
-        "ma2": current_ma2, 
-        "ma3": current_ma3,
+        "bias": trend_bias,
+        "price": current_candle["close"],
         "idx": current_idx,
         "candles": candles,
-        "ma1_array": ma1,
-        "ma2_array": ma2,
-        "ma3_array": ma3
+        "ma1": current_ma1,
+        "ma2": current_ma2,
     }
 
 # -------------------------
