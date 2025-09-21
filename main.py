@@ -720,7 +720,7 @@ def create_signal_chart(signal_data):
             linewidth=1.5 if chart_idx in [rejection_idx, confirmation_idx] else 1
         ))
         
-      ax.plot([i, i], [l, h], color=edge_color, linewidth=1.5, alpha=0.9)
+        ax.plot([i, i], [l, h], color=edge_color, linewidth=1.5, alpha=0.9)
     
     # Plot moving averages
     ma1_valid = [(i, v) for i, v in enumerate(chart_ma1) if v is not None]
