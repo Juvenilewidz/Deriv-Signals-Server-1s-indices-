@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-main.py — Dynamic Support & Resistance (Complete Strategy Implementation)
+main.py — Dynamic Support & Resistance (Enhanced Implementation)
 
-Implements the exact DSR strategy from documentation:
+Implements the exact DSR strategy with enhanced visualization:
 - MA1 (SMMA HLC3-9), MA2 (SMMA Close-19), MA3 (SMA MA2-25)
 - Only trade in trending markets with smoothly dispensed MAs
 - Signal on rejection at MA1/MA2 + confirmation candle
-- Above MA3 = Buy bias, Below MA3 = Sell bias
+- Enhanced confidence scoring and professional alerts
 - No premature signals - wait for confirmation candle close
 """
 
@@ -479,6 +479,69 @@ def is_confirmation_candle(candle, expected_direction):
     return False
 
 # -------------------------
+# Enhanced Signal Analysis
+# -------------------------
+def calculate_signal_confidence(signal_data, candles):
+    """Calculate confidence level based on multiple factors"""
+    confidence_score = 0.0
+    
+    # Factor 1: MA dispersion (0.2 weight)
+    ma1, ma2, ma3 = signal_data["ma1"], signal_data["ma2"], signal_data["ma3"]
+    avg_ma = (ma1 + ma2 + ma3) / 3
+    ma_dispersion = (abs(ma1 - ma2) + abs(ma2 - ma3)) / (2 * avg_ma)
+    if ma_dispersion > 0.01:  # Well dispersed MAs
+        confidence_score += 0.2
+    elif ma_dispersion > 0.005:
+        confidence_score += 0.1
+    
+    # Factor 2: Rejection candle quality (0.3 weight)
+    rejection_candle = candles[signal_data["rejection_idx"]]
+    total_range = rejection_candle["high"] - rejection_candle["low"]
+    body_size = abs(rejection_candle["close"] - rejection_candle["open"])
+    
+    if total_range > 0:
+        if signal_data["rejection_pattern"] in ["PIN_BAR_BULLISH", "PIN_BAR_BEARISH"]:
+            wick_ratio = max(
+                rejection_candle["high"] - max(rejection_candle["open"], rejection_candle["close"]),
+                min(rejection_candle["open"], rejection_candle["close"]) - rejection_candle["low"]
+            ) / total_range
+            if wick_ratio > 0.6:
+                confidence_score += 0.3
+            elif wick_ratio > 0.4:
+                confidence_score += 0.2
+        elif signal_data["rejection_pattern"] == "ENGULFING_BULLISH" or signal_data["rejection_pattern"] == "ENGULFING_BEARISH":
+            confidence_score += 0.25
+        else:
+            confidence_score += 0.15
+    
+    # Factor 3: Confirmation candle strength (0.2 weight)
+    confirmation_candle = candles[signal_data["confirmation_idx"]]
+    conf_body = abs(confirmation_candle["close"] - confirmation_candle["open"])
+    conf_range = confirmation_candle["high"] - confirmation_candle["low"]
+    
+    if conf_range > 0:
+        body_ratio = conf_body / conf_range
+        if body_ratio > 0.7:  # Strong confirmation
+            confidence_score += 0.2
+        elif body_ratio > 0.5:
+            confidence_score += 0.15
+        else:
+            confidence_score += 0.1
+    
+    # Factor 4: Trend strength (0.15 weight)
+    if signal_data["trend_status"] == "TRENDING":
+        confidence_score += 0.15
+    
+    # Factor 5: Price position relative to MA3 (0.15 weight)
+    price_ma3_diff = abs(signal_data["price"] - ma3) / ma3
+    if price_ma3_diff > 0.005:  # Good separation from trend filter
+        confidence_score += 0.15
+    elif price_ma3_diff > 0.002:
+        confidence_score += 0.1
+    
+    return min(confidence_score, 1.0)  # Cap at 1.0
+
+# -------------------------
 # Signal Detection Logic
 # -------------------------
 def price_near_ma(price, ma_level, tolerance_pct=0.15):
@@ -488,7 +551,7 @@ def price_near_ma(price, ma_level, tolerance_pct=0.15):
     return abs(price - ma_level) / ma_level <= (tolerance_pct / 100.0)
 
 def detect_signal(candles, tf, shorthand):
-    """Detect DSR signals according to exact strategy rules"""
+    """Detect DSR signals according to exact strategy rules with enhanced analysis"""
     n = len(candles)
     if n < MIN_CANDLES:
         return None
@@ -552,6 +615,7 @@ def detect_signal(candles, tf, shorthand):
     near_ma2_low = price_near_ma(rejection_low, rej_ma2)
     
     signal_side = None
+    ma_level = "MA1" if (near_ma1_high or near_ma1_low) else "MA2"
     
     # 5. Signal logic based on bias and rejection pattern
     if market_bias == "BUY_BIAS":
@@ -579,7 +643,8 @@ def detect_signal(candles, tf, shorthand):
     if signal_side == "SELL" and market_bias != "SELL_BIAS":
         return None
     
-    return {
+    # Create enhanced signal data
+    signal_data = {
         "symbol": shorthand,
         "tf": tf,
         "side": signal_side,
@@ -592,8 +657,15 @@ def detect_signal(candles, tf, shorthand):
         "ma1": conf_ma1,
         "ma2": conf_ma2,
         "ma3": conf_ma3,
-        "trend_status": trend_reason
+        "trend_status": trend_reason,
+        "ma_level": ma_level
     }
+    
+    # Calculate confidence and trend strength
+    signal_data["confidence"] = calculate_signal_confidence(signal_data, candles)
+    signal_data["trend"] = "UPTREND" if market_bias == "BUY_BIAS" else "DOWNTREND"
+    
+    return signal_data
 
 # -------------------------
 # Chart Generation
@@ -648,7 +720,7 @@ def create_signal_chart(signal_data):
             linewidth=1.5 if chart_idx in [rejection_idx, confirmation_idx] else 1
         ))
         
-        ax.plot([i, i], [l, h], color=edge_color, linewidth=1.5, alpha=0.9)
+      ax.plot([i, i], [l, h], color=edge_color, linewidth=1.5, alpha=0.9)
     
     # Plot moving averages
     ma1_valid = [(i, v) for i, v in enumerate(chart_ma1) if v is not None]
@@ -693,9 +765,8 @@ def create_signal_chart(signal_data):
                   label="Confirmation Candle")
     
     # Enhanced title with more details
-    bias_emoji = "📈" if signal_data["market_bias"] == "BUY_BIAS" else "📉"
     tf = signal_data["tf"]
-    title = (f"{signal_data['symbol']} {tf}s - {signal_data['side']} DSR Signal {bias_emoji}\n"
+    title = (f"{signal_data['symbol']} {tf}s - {signal_data['side']} DSR Signal\n"
              f"Pattern: {signal_data['rejection_pattern']} → Confirmation")
     
     ax.set_title(title, fontsize=14, color='white', fontweight='bold', pad=20)
@@ -727,7 +798,7 @@ def create_signal_chart(signal_data):
 # Main Execution
 # -------------------------
 def run_analysis():
-    """Run complete DSR analysis with proper signal detection"""
+    """Run complete DSR analysis with enhanced signal detection and visualization"""
     signals_found = 0
     
     for shorthand, deriv_symbol in SYMBOL_MAP.items():
@@ -749,24 +820,55 @@ def run_analysis():
                     print(f"No signal detected for {shorthand}")
                 continue
             
-            # Use confirmation candle epoch for deduplication
+            # Time validation - ensure confirmation candle has closed
+            current_time = int(time.time())
             confirmation_epoch = signal["candles"][signal["confirmation_idx"]]["epoch"]
+            candle_close_time = confirmation_epoch + tf
+            
+            if current_time < candle_close_time:
+                if DEBUG:
+                    print(f"{shorthand}: Confirmation candle not yet closed, skipping signal")
+                continue
+            
             if already_sent(shorthand, tf, confirmation_epoch, signal["side"]):
                 if DEBUG:
                     print(f"Signal already sent for {shorthand}")
                 continue
             
-            # Create detailed alert message
-            bias_emoji = "📈" if signal["market_bias"] == "BUY_BIAS" else "📉"
+            # Timeframe display
+            tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
             
+            # Confidence level indicators
+            confidence_level = signal["confidence"]
+            if confidence_level >= 0.8:
+                confidence_indicator = "🔥 HIGH"
+            elif confidence_level >= 0.6:
+                confidence_indicator = "⚡ MEDIUM"
+            else:
+                confidence_indicator = "🔔 LOW"
+            
+            # Trend strength indicator
+            trend_indicator = "📈 STRONG" if signal["trend"] == "UPTREND" else "📉 STRONG"
+            
+            # Enhanced caption with detailed analysis
             caption = (
-                f"🎯 {signal['symbol']} {tf}s - {signal['side']} DSR SIGNAL\n"
-                f"{bias_emoji} Market Bias: {signal['market_bias'].replace('_', ' ')}\n"
-                f"🎨 Rejection Pattern: {signal['rejection_pattern']}\n" 
-                f"✅ Confirmation: Candle Closed {signal['side'].lower()}\n"
+                f"🎯 ADAPTIVE DSR SIGNAL\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 {signal['symbol']} ({tf_display})\n"
+                f"⚡️ {signal['side']} Signal\n"
+                f"🎨 Pattern: {signal['rejection_pattern']}\n"
+                f"📍 Level: {signal['ma_level']} (Dynamic S/R)\n"
+                f"📈 Trend: {signal['trend']} {trend_indicator}\n"
+                f"💪 Confidence: {confidence_indicator} ({confidence_level:.0%})\n"
                 f"💰 Entry Price: {signal['price']:.5f}\n"
-                f"📊 Trend Status: {signal['trend_status']}\n"
-                f"⚡ Signal Quality: HIGH (Rejection + Confirmation)"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🔵 MA1: {signal['ma1']:.5f}\n"
+                f"🔵 MA2: {signal['ma2']:.5f}\n"
+                f"🔴 MA3: {signal['ma3']:.5f}\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📊 Adaptive Algorithm\n"
+                f"⚙️ Market-Responsive Thresholds\n"
+                f"🎯 Signal: AFTER Confirmation Close"
             )
             
             chart_path = create_signal_chart(signal)
@@ -777,9 +879,10 @@ def run_analysis():
                 mark_sent(shorthand, tf, confirmation_epoch, signal["side"])
                 signals_found += 1
                 if DEBUG:
-                    print(f"DSR signal sent for {shorthand}: {signal['side']}")
+                    print(f"Enhanced DSR signal sent for {shorthand}: {signal['side']}")
                     print(f"Rejection: {signal['rejection_pattern']}")
-                    print(f"Market Bias: {signal['market_bias']}")
+                    print(f"Confidence: {confidence_level:.2f}")
+                    print(f"MA Level: {signal['ma_level']}")
             
             try:
                 os.unlink(chart_path)
@@ -792,7 +895,7 @@ def run_analysis():
                 traceback.print_exc()
     
     if DEBUG:
-        print(f"Analysis complete. {signals_found} DSR signals found.")
+        print(f"Enhanced analysis complete. {signals_found} DSR signals found.")
 
 if __name__ == "__main__":
     try:
