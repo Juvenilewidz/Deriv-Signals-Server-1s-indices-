@@ -251,8 +251,7 @@ def fetch_candles(symbol, timeframe, count=None):
         print(f"Final result: Fetched {len(candles)} candles for {symbol}")
     
     return candles
-#############################################################################
--------------------------
+###########################################################################
 # Enums for Signal Types
 # -------------------------
 class TrendDirection(Enum):
