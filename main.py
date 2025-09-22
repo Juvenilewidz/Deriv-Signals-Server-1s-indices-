@@ -23,28 +23,29 @@ except Exception:
 # Config
 
 # -------------------------
+# 
+# -------------------------
 # Config
 # -------------------------
-DERIV_API_KEY = os.getenv("DERIV_API_KEY","").strip()
-DERIV_APP_ID  = os.getenv("DERIV_APP_ID","1089").strip()
-DERIV_WS_URL  = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
-TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID","").strip()
+DERIV_API_KEY = os.getenv("DERIV_API_KEY", "").strip()
+DERIV_APP_ID = os.getenv("DERIV_APP_ID", "1089").strip()
+DERIV_WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-TIMEFRAMES = [int(x) for x in os.getenv("TIMEFRAMES","300").split(",") if x.strip().isdigit()]
-DEBUG = os.getenv("DEBUG","0") == "1"
-TEST_MODE = os.getenv("TEST_MODE","0") == "1"
+DEBUG = os.getenv("DEBUG", "0") == "1"
+TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
 
 CANDLES_N = 480
-LAST_N_CHART = 200
-CANDLE_WIDTH = 0.25
+LAST_N_CHART = 180
+CANDLE_WIDTH = 0.35
 TMPDIR = tempfile.gettempdir()
 ALERT_FILE = os.path.join(TMPDIR, "dsr_last_sent_main.json")
 MIN_CANDLES = 50
-LOOKBACK_PERIOD = 20
+LOOKBACK_PERIOD = 50
 
 # -------------------------
-# Symbol Mappings
+# Symbol Mappings with Multiple Timeframes
 # -------------------------
 SYMBOL_MAP = {
     "V75(1s)": "1HZ75V",
@@ -52,10 +53,13 @@ SYMBOL_MAP = {
     "V150(1s)": "1HZ150V",
 }
 
-
+# Symbol-specific timeframes - each symbol runs on 2 independent timeframes
 SYMBOL_TF_MAP = {
-    "V75(1s)": 1, "V100(1s)": 1, "V150(1s)": 1, "V15(1s)": 1
+    "V75(1s)": [300]  # 5min + 10min
+    "V100(1s)": [300]  # 5min + 10min  
+    "V150(1s)": [300]  # 5min + 10min
 }
+
 # -------------------------
 # WebSocket Data Fetching
 # -------------------------
@@ -65,7 +69,7 @@ def fetch_candles_http_fallback(symbol, timeframe, count=None):
         count = CANDLES_N
     
     try:
-        url = f"https://api.deriv.com/api/v1/ticks_history"
+        url = "https://api.deriv.com/api/v1/ticks_history"
         params = {
             "ticks_history": symbol,
             "adjust_start_time": 1,
@@ -225,7 +229,7 @@ def fetch_candles(symbol, timeframe, count=None):
         
         # Wait for result with timeout
         try:
-            result = result_queue.get(timeout=10)  # 10 second timeout
+            result = result_queue.get(timeout=10)
             if result == "SUCCESS":
                 if DEBUG:
                     print(f"Successfully received data for {symbol}")
@@ -259,7 +263,6 @@ def fetch_candles(symbol, timeframe, count=None):
         print(f"Final result: Fetched {len(candles)} candles for {symbol}")
     
     return candles
-
 # -------------------------
 
 # Enums
