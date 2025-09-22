@@ -10,13 +10,16 @@ Core Logic:
 5. Sell when price below MA3 + rejection at MA1/MA2 + bearish confirmation
 """
 
-import os, json, time, tempfile, traceback, requests
+import os, json, time, tempfile, traceback
 from datetime import datetime, timezone
+from dataclasses import dataclass
+from typing import Optional, List, Dict, Tuple
+from enum import Enum
 import websocket, matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 
-# Telegram helpers
+# Telegram helpers (fallback to print)
 try:
     from bot import send_telegram_message, send_telegram_photo
 except Exception:
