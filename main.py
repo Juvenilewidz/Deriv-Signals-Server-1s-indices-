@@ -13,6 +13,7 @@ import os, json, time, tempfile, traceback, requests
 from datetime import datetime, timezone
 import websocket, matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from enum import Enum
 from matplotlib.patches import Rectangle
 
 # Telegram helpers (fallback to print)
