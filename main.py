@@ -33,12 +33,7 @@ DERIV_WS_URL  = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID","").strip()
 
-# Fix: Ensure TIMEFRAMES are integers
-TIMEFRAMES = []
-for x in os.getenv("TIMEFRAMES","300").split(","):
-    x = x.strip()
-    if x.isdigit():
-        TIMEFRAMES.append(int(x))
+TIMEFRAMES = [int(x) for x in os.getenv("TIMEFRAMES","300").split(",") if x.strip().isdigit()]
 if not TIMEFRAMES:
     TIMEFRAMES = [300]  # Default fallback
 
@@ -54,7 +49,7 @@ MIN_CANDLES = 50
 LOOKBACK_PERIOD = 20
 
 # -------------------------
-# Symbol Mappings
+# Symbol Mappings - SIMPLIFIED
 # -------------------------
 SYMBOL_MAP = {
     "V75(1s)": "1HZ75V",
@@ -62,64 +57,33 @@ SYMBOL_MAP = {
     "V150(1s)": "1HZ150V",
 }
 
-SYMBOL_TF_MAP = {
-    "V75(1s)": "ticks", "V100(1s)": "ticks", "V150(1s)": "ticks", "V15(1s)": "ticks"
-}
-
 # -------------------------
-# WebSocket Data Fetching - FIXED VERSION
+# WebSocket Data Fetching - CLEANED
 # -------------------------
-# Replace the fetch_candles functions with these corrected versions:
-
-def get_timeframe_for_symbol(shorthand):
-    """Get the correct timeframe/granularity for Deriv API"""
-    # For synthetic indices, use tick data (no granularity parameter)
-    if shorthand in ["V75(1s)", "V100(1s)", "V150(1s)"]:
-        return "ticks"  # Special case for tick data
-    else:
-        return TIMEFRAMES[0] if TIMEFRAMES else 300
-
 def fetch_candles_http_fallback(symbol, timeframe, count=None):
-    """Fallback HTTP method to fetch candles - CORRECTED"""
+    """Fallback HTTP method to fetch candles"""
     if count is None:
         count = CANDLES_N
 
     try:
-        # For synthetic indices, we need to use ticks API differently
-        if timeframe == "ticks":
-            # Use ticks endpoint for synthetic indices
-            url = "https://api.deriv.com/api/v1/ticks_history"
-            params = {
-                "ticks_history": symbol,
-                "adjust_start_time": 1,
-                "count": count,
-                "end": "latest",
-                "start": 1,
-                "style": "ticks"  # Use ticks style, not candles
-            }
-        else:
-            # Use regular candles endpoint for other instruments
-            url = "https://api.deriv.com/api/v1/ticks_history"
-            params = {
-                "ticks_history": symbol,
-                "adjust_start_time": 1,
-                "count": count,
-                "end": "latest",
-                "start": 1,
-                "style": "candles",
-                "granularity": int(timeframe)  # Ensure it's an integer
-            }
+        url = "https://api.deriv.com/api/v1/ticks_history"
+        params = {
+            "ticks_history": symbol,
+            "adjust_start_time": 1,
+            "count": count,
+            "end": "latest",
+            "start": 1,
+            "style": "candles",
+            "granularity": timeframe
+        }
 
         if DEBUG:
-            print(f"HTTP request params: {params}")
+            print(f"HTTP fallback params: {params}")
 
         response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
-        data = response.json()
-        
-        if DEBUG:
-            print(f"HTTP response: {data.get('msg_type', 'unknown')}")
 
+        data = response.json()
         candles = []
 
         if data.get("msg_type") == "candles":
@@ -137,15 +101,6 @@ def fetch_candles_http_fallback(symbol, timeframe, count=None):
                     if DEBUG:
                         print(f"Skipping invalid candle data: {candle} - {e}")
                     continue
-                    
-        elif data.get("msg_type") == "ticks":
-            # Convert ticks to candle format (group by time periods)
-            ticks = data.get("ticks", [])
-            if ticks:
-                candles = convert_ticks_to_candles(ticks, 1)  # 1-second candles
-        elif data.get("error"):
-            if DEBUG:
-                print(f"API Error: {data.get('error')}")
 
         candles.sort(key=lambda x: x["epoch"])
         if DEBUG:
@@ -157,72 +112,36 @@ def fetch_candles_http_fallback(symbol, timeframe, count=None):
             print(f"HTTP fallback failed for {symbol}: {e}")
         return []
 
-def convert_ticks_to_candles(ticks, timeframe_seconds):
-    """Convert tick data to candle format"""
-    if not ticks:
-        return []
-    
-    candles = []
-    current_candle = None
-    
-    for tick in ticks:
-        try:
-            epoch = int(tick.get("epoch", 0))
-            price = float(tick.get("quote", 0))
-            
-            # Calculate candle start time
-            candle_start = (epoch // timeframe_seconds) * timeframe_seconds
-            
-            if current_candle is None or current_candle["epoch"] != candle_start:
-                # Save previous candle
-                if current_candle:
-                    candles.append(current_candle)
-                
-                # Start new candle
-                current_candle = {
-                    "epoch": candle_start,
-                    "open": price,
-                    "high": price,
-                    "low": price,
-                    "close": price
-                }
-            else:
-                # Update current candle
-                current_candle["high"] = max(current_candle["high"], price)
-                current_candle["low"] = min(current_candle["low"], price)
-                current_candle["close"] = price
-                
-        except (ValueError, TypeError):
-            continue
-    
-    # Add the last candle
-    if current_candle:
-        candles.append(current_candle)
-    
-    return candles
-
 def fetch_candles(symbol, timeframe, count=None):
-    """Fetch candlestick data from Deriv WebSocket API with corrected parameters"""
+    """Fetch candlestick data from Deriv WebSocket API with HTTP fallback"""
     if count is None:
         count = CANDLES_N
 
     candles = []
     ws = None
+    connection_established = False
+    data_received = False
 
     try:
         import threading
         import queue
+
+        # Use a queue to communicate between threads
         result_queue = queue.Queue()
 
         def on_message(ws, message):
-            nonlocal candles
+            nonlocal candles, data_received
             try:
                 data = json.loads(message)
                 if DEBUG:
-                    print(f"WS Received: {data.get('msg_type')}")
+                    print(f"Received message type: {data.get('msg_type')}")
 
+                # Handle different response types
                 if data.get("msg_type") == "candles":
                     candle_data = data.get("candles", [])
+                    if DEBUG:
+                        print(f"Received {len(candle_data)} candles")
+
                     for candle in candle_data:
                         try:
                             candles.append({
@@ -232,93 +151,117 @@ def fetch_candles(symbol, timeframe, count=None):
                                 "low": float(candle.get("low", 0)),
                                 "close": float(candle.get("close", 0))
                             })
-                        except (ValueError, TypeError):
+                        except (ValueError, TypeError) as e:
+                            if DEBUG:
+                                print(f"Skipping invalid candle: {candle} - {e}")
                             continue
+
+                    data_received = True
                     result_queue.put("SUCCESS")
-                    
-                elif data.get("msg_type") == "ticks":
-                    ticks = data.get("ticks", [])
-                    if ticks:
-                        candles = convert_ticks_to_candles(ticks, 1)
-                    result_queue.put("SUCCESS")
-                    
+
+                elif data.get("msg_type") == "ohlc":
+                    ohlc = data.get("ohlc", {})
+                    if ohlc:
+                        try:
+                            candles.append({
+                                "epoch": int(ohlc.get("epoch", 0)),
+                                "open": float(ohlc.get("open", 0)),
+                                "high": float(ohlc.get("high", 0)),
+                                "low": float(ohlc.get("low", 0)),
+                                "close": float(ohlc.get("close", 0))
+                            })
+                            data_received = True
+                        except (ValueError, TypeError) as e:
+                            if DEBUG:
+                                print(f"Invalid OHLC data: {ohlc} - {e}")
+
                 elif data.get("error"):
                     if DEBUG:
-                        print(f"WS Error: {data.get('error')}")
+                        print(f"API Error: {data.get('error')}")
                     result_queue.put("ERROR")
 
             except Exception as e:
                 if DEBUG:
-                    print(f"WS message error: {e}")
+                    print(f"Error processing message: {e}")
                 result_queue.put("ERROR")
 
         def on_error(ws, error):
             if DEBUG:
-                print(f"WS error: {error}")
+                print(f"WebSocket error: {error}")
             result_queue.put("ERROR")
 
+        def on_close(ws, close_status_code, close_msg):
+            if DEBUG:
+                print(f"WebSocket connection closed: {close_status_code}, {close_msg}")
+
         def on_open(ws):
+            nonlocal connection_established
+            connection_established = True
+            if DEBUG:
+                print(f"WebSocket connected, requesting candles for {symbol}")
+
             try:
-                if timeframe == "ticks":
-                    # For synthetic indices, request tick data
-                    request = {
-                        "ticks_history": symbol,
-                        "adjust_start_time": 1,
-                        "count": count,
-                        "end": "latest",
-                        "start": 1,
-                        "style": "ticks"
-                    }
-                else:
-                    # For regular instruments, request candles with proper granularity
-                    request = {
-                        "ticks_history": symbol,
-                        "adjust_start_time": 1,
-                        "count": count,
-                        "end": "latest",
-                        "start": 1,
-                        "style": "candles",
-                        "granularity": int(timeframe)
-                    }
-                
-                if DEBUG:
-                    print(f"WS request: {request}")
+                # Request historical candles
+                request = {
+                    "ticks_history": symbol,
+                    "adjust_start_time": 1,
+                    "count": count,
+                    "end": "latest",
+                    "start": 1,
+                    "style": "candles",
+                    "granularity": timeframe
+                }
                 ws.send(json.dumps(request))
+                if DEBUG:
+                    print(f"Sent request: {request}")
             except Exception as e:
                 if DEBUG:
-                    print(f"WS send error: {e}")
+                    print(f"Error sending request: {e}")
                 result_queue.put("ERROR")
 
+        # Create WebSocket connection
         ws = websocket.WebSocketApp(DERIV_WS_URL,
                                   on_open=on_open,
                                   on_message=on_message,
-                                  on_error=on_error)
+                                  on_error=on_error,
+                                  on_close=on_close)
 
+        # Run WebSocket in a separate thread
         def run_ws():
             try:
                 ws.run_forever(ping_interval=30, ping_timeout=10)
             except Exception as e:
                 if DEBUG:
-                    print(f"WS run error: {e}")
+                    print(f"WebSocket run_forever error: {e}")
                 result_queue.put("ERROR")
 
         ws_thread = threading.Thread(target=run_ws, daemon=True)
         ws_thread.start()
 
+        # Wait for result with timeout
         try:
-            result = result_queue.get(timeout=10)
-            if result != "SUCCESS":
+            result = result_queue.get(timeout=15)  # 15 second timeout
+            if result == "SUCCESS":
                 if DEBUG:
-                    print("WS failed, trying HTTP fallback")
+                    print(f"Successfully received data for {symbol}")
+            else:
+                if DEBUG:
+                    print(f"Failed to get data for {symbol}, trying HTTP fallback")
                 candles = fetch_candles_http_fallback(symbol, timeframe, count)
         except queue.Empty:
             if DEBUG:
-                print("WS timeout, trying HTTP fallback")
+                print(f"Timeout waiting for data from {symbol}, trying HTTP fallback")
             candles = fetch_candles_http_fallback(symbol, timeframe, count)
+
+        # Give a bit more time for data to arrive if we got some via WebSocket
+        if data_received and len(candles) < count * 0.8:  # If we got less than 80% of requested candles
+            time.sleep(2)
 
     except Exception as e:
         if DEBUG:
-            print(f"WS setup error: {e}")
+            print(f"Error fetching candles for {symbol}: {e}")
+            traceback.print_exc()
+        # Try HTTP fallback
         candles = fetch_candles_http_fallback(symbol, timeframe, count)
     finally:
         if ws:
@@ -327,79 +270,21 @@ def fetch_candles(symbol, timeframe, count=None):
             except:
                 pass
 
-    # Remove duplicates and sort
+    # Sort candles by epoch and remove duplicates
+    candles.sort(key=lambda x: x["epoch"])
+    
+    # Remove duplicate epochs
     unique_candles = []
     seen_epochs = set()
-    for candle in sorted(candles, key=lambda x: x["epoch"]):
+    for candle in candles:
         if candle["epoch"] not in seen_epochs:
             unique_candles.append(candle)
             seen_epochs.add(candle["epoch"])
 
     if DEBUG:
-        print(f"Final: {len(unique_candles)} candles for {symbol}")
+        print(f"Final result: Fetched {len(unique_candles)} unique candles for {symbol}")
 
     return unique_candles
-
-# Also update the main analysis function's timeframe handling:
-def run_adaptive_analysis():
-    signals_found = 0
-
-    for shorthand, deriv_symbol in SYMBOL_MAP.items():
-        try:
-            tf = get_timeframe_for_symbol(shorthand)
-
-            if DEBUG:
-                if tf == "ticks":
-                    tf_display = "1s (ticks)"
-                else:
-                    tf_int = int(tf)
-                    tf_display = f"{tf_int}s" if tf_int < 60 else f"{tf_int//60}m"
-                print(f"Analyzing {shorthand} ({deriv_symbol}) on {tf_display}...")
-
-            candles = fetch_candles(deriv_symbol, tf)
-            if len(candles) < MIN_CANDLES + 1:
-                if DEBUG:
-                    print(f"Insufficient candles for {shorthand}: {len(candles)}")
-                continue
-
-            # Convert tf to integer for signal processing
-            tf_seconds = 1 if tf == "ticks" else int(tf)
-            
-            signal = detect_adaptive_signal(candles, tf_seconds, shorthand)
-            if not signal:
-                continue
-
-            # Rest of the analysis logic remains the same...
-            confirmation_epoch = signal["candles"][signal["idx"]]["epoch"]
-            current_time = int(time.time())
-            candle_close_time = confirmation_epoch + tf_seconds
-
-            if current_time < candle_close_time:
-                if DEBUG:
-                    print(f"{shorthand}: Confirmation candle not yet closed, skipping signal")
-                continue
-
-            if already_sent(shorthand, tf_seconds, confirmation_epoch, signal["side"]):
-                if DEBUG:
-                    print(f"Signal already sent for {shorthand}")
-                continue
-
-            # Display formatting
-            if tf == "ticks":
-                tf_display = "1s (ticks)"
-            else:
-                tf_int = int(tf)
-                tf_display = f"{tf_int}s" if tf_int < 60 else f"{tf_int//60}m"
-
-            # Continue with signal processing...
-            # (rest of the function remains the same)
-            
-        except Exception as e:
-            if DEBUG:
-                print(f"Error analyzing {shorthand}: {e}")
-                traceback.print_exc()
-
-    return signals_found
 
 # Enums
 class TrendDirection(Enum):
@@ -447,19 +332,6 @@ def already_sent(shorthand, tf, epoch, side):
 
 def mark_sent(shorthand, tf, epoch, side):
     d=load_persist(); d[f"{shorthand}|{tf}"]={"epoch":epoch,"side":side}; save_persist(d)
-
-def get_timeframe_for_symbol(shorthand):
-    tf_value = SYMBOL_TF_MAP.get(shorthand, TIMEFRAMES[0] if TIMEFRAMES else 300)
-    
-    # Convert to integer if needed
-    if tf_value == "ticks":
-        return 1  # 1 second for tick data
-    elif isinstance(tf_value, str) and tf_value.isdigit():
-        return int(tf_value)
-    elif isinstance(tf_value, int):
-        return tf_value
-    else:
-        return 300  # Default fallback
 
 # Moving Averages
 def smma_correct(series, period):
@@ -875,7 +747,7 @@ def create_adaptive_signal_chart(signal_data):
     fig.patch.set_facecolor('#0a0a0a')
     ax.set_facecolor('#0a0a0a')
 
-    for i, candle in enumerate(chart_candles):
+    fori, candle in enumerate(chart_candles):
         o, h, l, c = candle["open"], candle["high"], candle["low"], candle["close"]
 
         if c >= o:
@@ -994,47 +866,45 @@ def create_adaptive_signal_chart(signal_data):
 
     return chart_file.name
 
-# Main Analysis Function - FIXED TIMEFRAME DISPLAY
+# Main Analysis Function - CLEANED AND SIMPLIFIED
 def run_adaptive_analysis():
     signals_found = 0
 
     for shorthand, deriv_symbol in SYMBOL_MAP.items():
         try:
-            tf = get_timeframe_for_symbol(shorthand)
+            # Use the first timeframe from TIMEFRAMES config
+            tf = TIMEFRAMES[0]
 
-            # FIX: Ensure tf is integer before comparison
-            tf_int = int(tf) if isinstance(tf, (str, float)) else tf
-            
             if DEBUG:
-                tf_display = f"{tf_int}s" if tf_int < 60 else f"{tf_int//60}m"
+                tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
                 print(f"Analyzing {shorthand} ({deriv_symbol}) on {tf_display}...")
 
-            candles = fetch_candles(deriv_symbol, tf_int)
+            candles = fetch_candles(deriv_symbol, tf)
             if len(candles) < MIN_CANDLES + 1:
                 if DEBUG:
                     print(f"Insufficient candles for {shorthand}: {len(candles)}")
                 continue
 
-            signal = detect_adaptive_signal(candles, tf_int, shorthand)
+            signal = detect_adaptive_signal(candles, tf, shorthand)
             if not signal:
                 continue
 
             confirmation_epoch = signal["candles"][signal["idx"]]["epoch"]
 
             current_time = int(time.time())
-            candle_close_time = confirmation_epoch + tf_int
+            candle_close_time = confirmation_epoch + tf
 
             if current_time < candle_close_time:
                 if DEBUG:
                     print(f"{shorthand}: Confirmation candle not yet closed, skipping signal")
                 continue
 
-            if already_sent(shorthand, tf_int, confirmation_epoch, signal["side"]):
+            if already_sent(shorthand, tf, confirmation_epoch, signal["side"]):
                 if DEBUG:
                     print(f"Signal already sent for {shorthand}")
                 continue
 
-            tf_display = f"{tf_int}s" if tf_int < 60 else f"{tf_int//60}m"
+            tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
 
             confidence_level = signal["confidence"]
             if confidence_level >= 0.8:
@@ -1071,7 +941,7 @@ def run_adaptive_analysis():
             success, msg_id = send_telegram_photo(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, caption, chart_path)
 
             if success:
-                mark_sent(shorthand, tf_int, confirmation_epoch, signal["side"])
+                mark_sent(shorthand, tf, confirmation_epoch, signal["side"])
                 signals_found += 1
                 if DEBUG:
                     print(f"PROPERLY TIMED Adaptive DSR signal sent for {shorthand}: {signal['side']} (Confidence: {confidence_level:.0%})")
