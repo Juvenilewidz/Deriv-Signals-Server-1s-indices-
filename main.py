@@ -15,6 +15,7 @@ import websocket, matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from enum import Enum
 from matplotlib.patches import Rectangle
+from dataclasses import dataclass
 
 # Telegram helpers (fallback to print)
 try:
