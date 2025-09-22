@@ -33,7 +33,15 @@ DERIV_WS_URL  = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID","").strip()
 
-TIMEFRAMES = [int(x) for x in os.getenv("TIMEFRAMES","300").split(",") if x.strip().isdigit()]
+# Fix: Ensure TIMEFRAMES are integers
+TIMEFRAMES = []
+for x in os.getenv("TIMEFRAMES","300").split(","):
+    x = x.strip()
+    if x.isdigit():
+        TIMEFRAMES.append(int(x))
+if not TIMEFRAMES:
+    TIMEFRAMES = [300]  # Default fallback
+
 DEBUG = os.getenv("DEBUG","0") == "1"
 TEST_MODE = os.getenv("TEST_MODE","0") == "1"
 
@@ -59,13 +67,13 @@ SYMBOL_TF_MAP = {
 }
 
 # -------------------------
-# WebSocket Data Fetching
+# WebSocket Data Fetching - FIXED VERSION
 # -------------------------
 def fetch_candles_http_fallback(symbol, timeframe, count=None):
     """Fallback HTTP method to fetch candles"""
     if count is None:
         count = CANDLES_N
-    
+
     try:
         url = f"https://api.deriv.com/api/v1/ticks_history"
         params = {
@@ -77,32 +85,37 @@ def fetch_candles_http_fallback(symbol, timeframe, count=None):
             "style": "candles",
             "granularity": timeframe
         }
-        
+
         if DEBUG:
             print(f"Trying HTTP fallback for {symbol}")
-        
-        response = requests.get(url, params=params, timeout=10)
+
+        response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
-        
+
         data = response.json()
         candles = []
-        
+
         if data.get("msg_type") == "candles":
             candle_data = data.get("candles", [])
             for candle in candle_data:
-                candles.append({
-                    "epoch": int(candle.get("epoch", 0)),
-                    "open": float(candle.get("open", 0)),
-                    "high": float(candle.get("high", 0)),
-                    "low": float(candle.get("low", 0)),
-                    "close": float(candle.get("close", 0))
-                })
-        
+                try:
+                    candles.append({
+                        "epoch": int(candle.get("epoch", 0)),
+                        "open": float(candle.get("open", 0)),
+                        "high": float(candle.get("high", 0)),
+                        "low": float(candle.get("low", 0)),
+                        "close": float(candle.get("close", 0))
+                    })
+                except (ValueError, TypeError) as e:
+                    if DEBUG:
+                        print(f"Skipping invalid candle data: {candle} - {e}")
+                    continue
+
         candles.sort(key=lambda x: x["epoch"])
         if DEBUG:
             print(f"HTTP fallback fetched {len(candles)} candles for {symbol}")
         return candles
-        
+
     except Exception as e:
         if DEBUG:
             print(f"HTTP fallback failed for {symbol}: {e}")
@@ -112,81 +125,100 @@ def fetch_candles(symbol, timeframe, count=None):
     """Fetch candlestick data from Deriv WebSocket API with HTTP fallback"""
     if count is None:
         count = CANDLES_N
-    
+
+    # Convert timeframe to integer if it's a string
+    try:
+        if isinstance(timeframe, str):
+            if timeframe == "ticks":
+                timeframe = 1  # 1 second for tick data
+            else:
+                timeframe = int(timeframe)
+    except (ValueError, TypeError):
+        timeframe = 300  # Default fallback
+
     candles = []
     ws = None
     connection_established = False
     data_received = False
-    
+
     try:
         import threading
         import queue
-        
+
         # Use a queue to communicate between threads
         result_queue = queue.Queue()
-        
+
         def on_message(ws, message):
             nonlocal candles, data_received
             try:
                 data = json.loads(message)
                 if DEBUG:
                     print(f"Received message type: {data.get('msg_type')}")
-                
+
                 # Handle different response types
                 if data.get("msg_type") == "candles":
                     candle_data = data.get("candles", [])
                     if DEBUG:
                         print(f"Received {len(candle_data)} candles")
-                    
+
                     for candle in candle_data:
-                        candles.append({
-                            "epoch": int(candle.get("epoch", 0)),
-                            "open": float(candle.get("open", 0)),
-                            "high": float(candle.get("high", 0)),
-                            "low": float(candle.get("low", 0)),
-                            "close": float(candle.get("close", 0))
-                        })
-                    
+                        try:
+                            candles.append({
+                                "epoch": int(candle.get("epoch", 0)),
+                                "open": float(candle.get("open", 0)),
+                                "high": float(candle.get("high", 0)),
+                                "low": float(candle.get("low", 0)),
+                                "close": float(candle.get("close", 0))
+                            })
+                        except (ValueError, TypeError) as e:
+                            if DEBUG:
+                                print(f"Skipping invalid candle: {candle} - {e}")
+                            continue
+
                     data_received = True
                     result_queue.put("SUCCESS")
-                
+
                 elif data.get("msg_type") == "ohlc":
                     ohlc = data.get("ohlc", {})
                     if ohlc:
-                        candles.append({
-                            "epoch": int(ohlc.get("epoch", 0)),
-                            "open": float(ohlc.get("open", 0)),
-                            "high": float(ohlc.get("high", 0)),
-                            "low": float(ohlc.get("low", 0)),
-                            "close": float(ohlc.get("close", 0))
-                        })
-                        data_received = True
-                
+                        try:
+                            candles.append({
+                                "epoch": int(ohlc.get("epoch", 0)),
+                                "open": float(ohlc.get("open", 0)),
+                                "high": float(ohlc.get("high", 0)),
+                                "low": float(ohlc.get("low", 0)),
+                                "close": float(ohlc.get("close", 0))
+                            })
+                            data_received = True
+                        except (ValueError, TypeError) as e:
+                            if DEBUG:
+                                print(f"Invalid OHLC data: {ohlc} - {e}")
+
                 elif data.get("error"):
                     if DEBUG:
                         print(f"API Error: {data.get('error')}")
                     result_queue.put("ERROR")
-                
+
             except Exception as e:
                 if DEBUG:
                     print(f"Error processing message: {e}")
                 result_queue.put("ERROR")
-        
+
         def on_error(ws, error):
             if DEBUG:
                 print(f"WebSocket error: {error}")
             result_queue.put("ERROR")
-        
+
         def on_close(ws, close_status_code, close_msg):
             if DEBUG:
                 print(f"WebSocket connection closed: {close_status_code}, {close_msg}")
-        
+
         def on_open(ws):
             nonlocal connection_established
             connection_established = True
             if DEBUG:
                 print(f"WebSocket connected, requesting candles for {symbol}")
-            
+
             try:
                 # Request historical candles
                 request = {
@@ -205,29 +237,29 @@ def fetch_candles(symbol, timeframe, count=None):
                 if DEBUG:
                     print(f"Error sending request: {e}")
                 result_queue.put("ERROR")
-        
+
         # Create WebSocket connection
         ws = websocket.WebSocketApp(DERIV_WS_URL,
                                   on_open=on_open,
                                   on_message=on_message,
                                   on_error=on_error,
                                   on_close=on_close)
-        
+
         # Run WebSocket in a separate thread
         def run_ws():
             try:
-                ws.run_forever()
+                ws.run_forever(ping_interval=30, ping_timeout=10)
             except Exception as e:
                 if DEBUG:
                     print(f"WebSocket run_forever error: {e}")
                 result_queue.put("ERROR")
-        
+
         ws_thread = threading.Thread(target=run_ws, daemon=True)
         ws_thread.start()
-        
+
         # Wait for result with timeout
         try:
-            result = result_queue.get(timeout=10)  # 10 second timeout
+            result = result_queue.get(timeout=15)  # 15 second timeout
             if result == "SUCCESS":
                 if DEBUG:
                     print(f"Successfully received data for {symbol}")
@@ -239,11 +271,11 @@ def fetch_candles(symbol, timeframe, count=None):
             if DEBUG:
                 print(f"Timeout waiting for data from {symbol}, trying HTTP fallback")
             candles = fetch_candles_http_fallback(symbol, timeframe, count)
-        
+
         # Give a bit more time for data to arrive if we got some via WebSocket
-        if data_received:
-            time.sleep(1)
-        
+        if data_received and len(candles) < count * 0.8:  # If we got less than 80% of requested candles
+            time.sleep(2)
+
     except Exception as e:
         if DEBUG:
             print(f"Error fetching candles for {symbol}: {e}")
@@ -252,17 +284,28 @@ def fetch_candles(symbol, timeframe, count=None):
         candles = fetch_candles_http_fallback(symbol, timeframe, count)
     finally:
         if ws:
-            ws.close()
-    
-    # Sort candles by epoch
+            try:
+                ws.close()
+            except:
+                pass
+
+    # Sort candles by epoch and remove duplicates
     candles.sort(key=lambda x: x["epoch"])
     
+    # Remove duplicate epochs
+    unique_candles = []
+    seen_epochs = set()
+    for candle in candles:
+        if candle["epoch"] not in seen_epochs:
+            unique_candles.append(candle)
+            seen_epochs.add(candle["epoch"])
+
     if DEBUG:
-        print(f"Final result: Fetched {len(candles)} candles for {symbol}")
-    
-    return candles
-################$=============================================##########
-# # Enums
+        print(f"Final result: Fetched {len(unique_candles)} unique candles for {symbol}")
+
+    return unique_candles
+
+# Enums
 class TrendDirection(Enum):
     UPTREND = "UPTREND"
     DOWNTREND = "DOWNTREND"
@@ -310,7 +353,17 @@ def mark_sent(shorthand, tf, epoch, side):
     d=load_persist(); d[f"{shorthand}|{tf}"]={"epoch":epoch,"side":side}; save_persist(d)
 
 def get_timeframe_for_symbol(shorthand):
-    return SYMBOL_TF_MAP.get(shorthand, TIMEFRAMES[0] if TIMEFRAMES else 300)
+    tf_value = SYMBOL_TF_MAP.get(shorthand, TIMEFRAMES[0] if TIMEFRAMES else 300)
+    
+    # Convert to integer if needed
+    if tf_value == "ticks":
+        return 1  # 1 second for tick data
+    elif isinstance(tf_value, str) and tf_value.isdigit():
+        return int(tf_value)
+    elif isinstance(tf_value, int):
+        return tf_value
+    else:
+        return 300  # Default fallback
 
 # Moving Averages
 def smma_correct(series, period):
@@ -638,47 +691,6 @@ def calculate_signal_confidence(trend, pattern, mas_objects, candles):
 
     return min(confidence, 1.0)
 
-# Data Fetching
-def fetch_candles(sym, tf, count=CANDLES_N):
-    for attempt in range(3):
-        try:
-            ws = websocket.create_connection(DERIV_WS_URL, timeout=20)
-
-            if DERIV_API_KEY:
-                ws.send(json.dumps({"authorize": DERIV_API_KEY}))
-                auth_resp = ws.recv()
-
-            request = {
-                "ticks_history": sym,
-                "style": "candles", 
-                "granularity": tf,
-                "count": count,
-                "end": "latest"
-            }
-
-            ws.send(json.dumps(request))
-            response = json.loads(ws.recv())
-            ws.close()
-
-            if DEBUG:
-                print(f"Fetched {len(response.get('candles', []))} candles for {sym}")
-
-            if "candles" in response and response["candles"]:
-                return [{
-                    "epoch": int(c["epoch"]),
-                    "open": float(c["open"]),
-                    "high": float(c["high"]),
-                    "low": float(c["low"]),
-                    "close": float(c["close"])
-                } for c in response["candles"]]
-
-        except Exception as e:
-            if DEBUG:
-                print(f"Attempt {attempt + 1} failed for {sym}: {e}")
-            time.sleep(1)
-
-    return []
-
 # Signal Detection with Timing Fix
 def detect_adaptive_signal(candles, tf, shorthand):
     n = len(candles)
@@ -886,7 +898,7 @@ def create_adaptive_signal_chart(signal_data):
 
     return chart_file.name
 
-# Main Analysis Function
+# Main Analysis Function - FIXED TIMEFRAME DISPLAY
 def run_adaptive_analysis():
     signals_found = 0
 
@@ -894,36 +906,39 @@ def run_adaptive_analysis():
         try:
             tf = get_timeframe_for_symbol(shorthand)
 
+            # FIX: Ensure tf is integer before comparison
+            tf_int = int(tf) if isinstance(tf, (str, float)) else tf
+            
             if DEBUG:
-                tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
+                tf_display = f"{tf_int}s" if tf_int < 60 else f"{tf_int//60}m"
                 print(f"Analyzing {shorthand} ({deriv_symbol}) on {tf_display}...")
 
-            candles = fetch_candles(deriv_symbol, tf)
+            candles = fetch_candles(deriv_symbol, tf_int)
             if len(candles) < MIN_CANDLES + 1:
                 if DEBUG:
                     print(f"Insufficient candles for {shorthand}: {len(candles)}")
                 continue
 
-            signal = detect_adaptive_signal(candles, tf, shorthand)
+            signal = detect_adaptive_signal(candles, tf_int, shorthand)
             if not signal:
                 continue
 
             confirmation_epoch = signal["candles"][signal["idx"]]["epoch"]
 
             current_time = int(time.time())
-            candle_close_time = confirmation_epoch + tf
+            candle_close_time = confirmation_epoch + tf_int
 
             if current_time < candle_close_time:
                 if DEBUG:
                     print(f"{shorthand}: Confirmation candle not yet closed, skipping signal")
                 continue
 
-            if already_sent(shorthand, tf, confirmation_epoch, signal["side"]):
+            if already_sent(shorthand, tf_int, confirmation_epoch, signal["side"]):
                 if DEBUG:
                     print(f"Signal already sent for {shorthand}")
                 continue
 
-            tf_display = f"{tf}s" if tf < 60 else f"{tf//60}m"
+            tf_display = f"{tf_int}s" if tf_int < 60 else f"{tf_int//60}m"
 
             confidence_level = signal["confidence"]
             if confidence_level >= 0.8:
@@ -960,7 +975,7 @@ def run_adaptive_analysis():
             success, msg_id = send_telegram_photo(TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, caption, chart_path)
 
             if success:
-                mark_sent(shorthand, tf, confirmation_epoch, signal["side"])
+                mark_sent(shorthand, tf_int, confirmation_epoch, signal["side"])
                 signals_found += 1
                 if DEBUG:
                     print(f"PROPERLY TIMED Adaptive DSR signal sent for {shorthand}: {signal['side']} (Confidence: {confidence_level:.0%})")
