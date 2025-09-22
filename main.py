@@ -747,7 +747,7 @@ def create_adaptive_signal_chart(signal_data):
     fig.patch.set_facecolor('#0a0a0a')
     ax.set_facecolor('#0a0a0a')
 
-    fori, candle in enumerate(chart_candles):
+    for i, candle in enumerate(chart_candles):
         o, h, l, c = candle["open"], candle["high"], candle["low"], candle["close"]
 
         if c >= o:
