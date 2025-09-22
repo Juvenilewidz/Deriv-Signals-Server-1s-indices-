@@ -36,11 +36,12 @@ DEBUG = os.getenv("DEBUG","0") == "1"
 TEST_MODE = os.getenv("TEST_MODE","0") == "1"
 
 CANDLES_N = 480
-LAST_N_CHART = 180
-CANDLE_WIDTH = 0.35
+LAST_N_CHART = 200
+CANDLE_WIDTH = 0.25
 TMPDIR = tempfile.gettempdir()
 ALERT_FILE = os.path.join(TMPDIR, "dsr_last_sent_main.json")
 MIN_CANDLES = 50
+LOOKBACK_PERIOD = 20
 
 # -------------------------
 # Symbol Mappings
