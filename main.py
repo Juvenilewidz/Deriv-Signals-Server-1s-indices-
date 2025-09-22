@@ -43,6 +43,7 @@ CANDLE_WIDTH = 0.35
 TMPDIR = tempfile.gettempdir()
 ALERT_FILE = os.path.join(TMPDIR, "dsr_last_sent_main.json")
 MIN_CANDLES = 50
+LOOKBACK_PERIOD = 20
 
 # -------------------------
 # Symbol Mappings
