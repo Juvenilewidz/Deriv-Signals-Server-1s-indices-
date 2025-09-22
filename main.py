@@ -55,9 +55,9 @@ SYMBOL_MAP = {
 
 # Symbol-specific timeframes - each symbol runs on 2 independent timeframes
 SYMBOL_TF_MAP = {
-    "V75(1s)": [300]  # 5min + 10min
-    "V100(1s)": [300]  # 5min + 10min  
-    "V150(1s)": [300]  # 5min + 10min
+    "V75(1s)": [300],      # 5min + 10min
+    "V100(1s)": [300],   # 5min + 10min  
+    "V150(1s)": [300],  # 5min + 10min
 }
 
 # -------------------------
