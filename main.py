@@ -55,7 +55,7 @@ SYMBOL_MAP = {
 }
 
 SYMBOL_TF_MAP = {
-    "V75(1s)": ticks, "V100(1s)": ticks, "V150(1s)": ticks, "V15(1s)": ticks
+    "V75(1s)": "ticks", "V100(1s)": "ticks", "V150(1s)": "ticks", "V15(1s)": "ticks"
 }
 
 # -------------------------
