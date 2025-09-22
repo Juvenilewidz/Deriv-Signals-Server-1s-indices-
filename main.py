@@ -21,6 +21,10 @@ except Exception:
     def send_telegram_photo(token, chat_id, caption, photo): print("[PHOTO]", caption, photo); return True, "local"
 
 # Config
+
+# -------------------------
+# Config
+# -------------------------
 DERIV_API_KEY = os.getenv("DERIV_API_KEY","").strip()
 DERIV_APP_ID  = os.getenv("DERIV_APP_ID","1089").strip()
 DERIV_WS_URL  = f"wss://ws.derivws.com/websockets/v3?app_id={DERIV_APP_ID}"
@@ -37,20 +41,221 @@ CANDLE_WIDTH = 0.35
 TMPDIR = tempfile.gettempdir()
 ALERT_FILE = os.path.join(TMPDIR, "dsr_last_sent_main.json")
 MIN_CANDLES = 50
-LOOKBACK_PERIOD = 20
 
+# -------------------------
 # Symbol Mappings
+# -------------------------
 SYMBOL_MAP = {
-    "V10": "R_10", "V25": "R_25", "V50": "R_50", "V75": "R_75",
-    "Jump10": "JD10", "Jump25": "JD25", "Jump50": "JD50", 
-    "Jump75": "JD75", "Jump100": "JD100",
-    "V75(1s)": "1s_V75", "V100(1s)": "1s_V100", 
-    "V150(1s)": "1s_V150", "V15(1s)": "1s_V15"
+    "V75(1s)": "1HZ75V",
+    "V100(1s)": "1HZ100V", 
+    "V150(1s)": "1HZ150V",
 }
 
-SYMBOL_TF_MAP = {
-    "V75(1s)": 1, "V100(1s)": 1, "V150(1s)": 1, "V15(1s)": 1
-}
+# -------------------------
+# WebSocket Data Fetching
+# -------------------------
+def fetch_candles_http_fallback(symbol, timeframe, count=None):
+    """Fallback HTTP method to fetch candles"""
+    if count is None:
+        count = CANDLES_N
+    
+    try:
+        url = f"https://api.deriv.com/api/v1/ticks_history"
+        params = {
+            "ticks_history": symbol,
+            "adjust_start_time": 1,
+            "count": count,
+            "end": "latest",
+            "start": 1,
+            "style": "candles",
+            "granularity": timeframe
+        }
+        
+        if DEBUG:
+            print(f"Trying HTTP fallback for {symbol}")
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        candles = []
+        
+        if data.get("msg_type") == "candles":
+            candle_data = data.get("candles", [])
+            for candle in candle_data:
+                candles.append({
+                    "epoch": int(candle.get("epoch", 0)),
+                    "open": float(candle.get("open", 0)),
+                    "high": float(candle.get("high", 0)),
+                    "low": float(candle.get("low", 0)),
+                    "close": float(candle.get("close", 0))
+                })
+        
+        candles.sort(key=lambda x: x["epoch"])
+        if DEBUG:
+            print(f"HTTP fallback fetched {len(candles)} candles for {symbol}")
+        return candles
+        
+    except Exception as e:
+        if DEBUG:
+            print(f"HTTP fallback failed for {symbol}: {e}")
+        return []
+
+def fetch_candles(symbol, timeframe, count=None):
+    """Fetch candlestick data from Deriv WebSocket API with HTTP fallback"""
+    if count is None:
+        count = CANDLES_N
+    
+    candles = []
+    ws = None
+    connection_established = False
+    data_received = False
+    
+    try:
+        import threading
+        import queue
+        
+        # Use a queue to communicate between threads
+        result_queue = queue.Queue()
+        
+        def on_message(ws, message):
+            nonlocal candles, data_received
+            try:
+                data = json.loads(message)
+                if DEBUG:
+                    print(f"Received message type: {data.get('msg_type')}")
+                
+                # Handle different response types
+                if data.get("msg_type") == "candles":
+                    candle_data = data.get("candles", [])
+                    if DEBUG:
+                        print(f"Received {len(candle_data)} candles")
+                    
+                    for candle in candle_data:
+                        candles.append({
+                            "epoch": int(candle.get("epoch", 0)),
+                            "open": float(candle.get("open", 0)),
+                            "high": float(candle.get("high", 0)),
+                            "low": float(candle.get("low", 0)),
+                            "close": float(candle.get("close", 0))
+                        })
+                    
+                    data_received = True
+                    result_queue.put("SUCCESS")
+                
+                elif data.get("msg_type") == "ohlc":
+                    ohlc = data.get("ohlc", {})
+                    if ohlc:
+                        candles.append({
+                            "epoch": int(ohlc.get("epoch", 0)),
+                            "open": float(ohlc.get("open", 0)),
+                            "high": float(ohlc.get("high", 0)),
+                            "low": float(ohlc.get("low", 0)),
+                            "close": float(ohlc.get("close", 0))
+                        })
+                        data_received = True
+                
+                elif data.get("error"):
+                    if DEBUG:
+                        print(f"API Error: {data.get('error')}")
+                    result_queue.put("ERROR")
+                
+            except Exception as e:
+                if DEBUG:
+                    print(f"Error processing message: {e}")
+                result_queue.put("ERROR")
+        
+        def on_error(ws, error):
+            if DEBUG:
+                print(f"WebSocket error: {error}")
+            result_queue.put("ERROR")
+        
+        def on_close(ws, close_status_code, close_msg):
+            if DEBUG:
+                print(f"WebSocket connection closed: {close_status_code}, {close_msg}")
+        
+        def on_open(ws):
+            nonlocal connection_established
+            connection_established = True
+            if DEBUG:
+                print(f"WebSocket connected, requesting candles for {symbol}")
+            
+            try:
+                # Request historical candles
+                request = {
+                    "ticks_history": symbol,
+                    "adjust_start_time": 1,
+                    "count": count,
+                    "end": "latest",
+                    "start": 1,
+                    "style": "candles",
+                    "granularity": timeframe
+                }
+                ws.send(json.dumps(request))
+                if DEBUG:
+                    print(f"Sent request: {request}")
+            except Exception as e:
+                if DEBUG:
+                    print(f"Error sending request: {e}")
+                result_queue.put("ERROR")
+        
+        # Create WebSocket connection
+        ws = websocket.WebSocketApp(DERIV_WS_URL,
+                                  on_open=on_open,
+                                  on_message=on_message,
+                                  on_error=on_error,
+                                  on_close=on_close)
+        
+        # Run WebSocket in a separate thread
+        def run_ws():
+            try:
+                ws.run_forever()
+            except Exception as e:
+                if DEBUG:
+                    print(f"WebSocket run_forever error: {e}")
+                result_queue.put("ERROR")
+        
+        ws_thread = threading.Thread(target=run_ws, daemon=True)
+        ws_thread.start()
+        
+        # Wait for result with timeout
+        try:
+            result = result_queue.get(timeout=10)  # 10 second timeout
+            if result == "SUCCESS":
+                if DEBUG:
+                    print(f"Successfully received data for {symbol}")
+            else:
+                if DEBUG:
+                    print(f"Failed to get data for {symbol}, trying HTTP fallback")
+                candles = fetch_candles_http_fallback(symbol, timeframe, count)
+        except queue.Empty:
+            if DEBUG:
+                print(f"Timeout waiting for data from {symbol}, trying HTTP fallback")
+            candles = fetch_candles_http_fallback(symbol, timeframe, count)
+        
+        # Give a bit more time for data to arrive if we got some via WebSocket
+        if data_received:
+            time.sleep(1)
+        
+    except Exception as e:
+        if DEBUG:
+            print(f"Error fetching candles for {symbol}: {e}")
+            traceback.print_exc()
+        # Try HTTP fallback
+        candles = fetch_candles_http_fallback(symbol, timeframe, count)
+    finally:
+        if ws:
+            ws.close()
+    
+    # Sort candles by epoch
+    candles.sort(key=lambda x: x["epoch"])
+    
+    if DEBUG:
+        print(f"Final result: Fetched {len(candles)} candles for {symbol}")
+    
+    return candles
+
+# -------------------------
 
 # Enums
 class TrendDirection(Enum):
