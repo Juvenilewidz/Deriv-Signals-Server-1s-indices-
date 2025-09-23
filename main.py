@@ -449,7 +449,7 @@ def assess_ma_separation_quality(mas_objects):
     recent_mas = mas_objects[-LOOKBACK_PERIOD:]
     valid_mas = [ma for ma in recent_mas if ma is not None]
 
-    if len(valid_mas) < LOOKBACK_PERIOD * 0.7:
+    if len(valid_mas) < LOOKBACK_PERIOD * 0.45:
         return False
 
     separations = []
@@ -470,7 +470,7 @@ def assess_ma_separation_quality(mas_objects):
     current_sep1 = abs(current_ma.ma1 - current_ma.ma2)
     current_sep2 = abs(current_ma.ma2 - current_ma.ma3)
 
-    return (current_sep1 > avg_separation * 0.6 and current_sep2 > avg_separation * 0.6)
+    return (current_sep1 > avg_separation * 0.4 and current_sep2 > avg_separation * 0.4)
 
 def count_ma_crossovers(mas_objects):
     if len(mas_objects) < 2:
@@ -580,7 +580,7 @@ def is_price_near_ma(price_level, ma_level, recent_ranges):
         return False
 
     avg_range = sum(recent_ranges) / len(recent_ranges)
-    proximity_threshold = avg_range * 0.5
+    proximity_threshold = avg_range * 0.75
 
     return abs(price_level - ma_level) <= proximity_threshold
 
